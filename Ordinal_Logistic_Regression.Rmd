@@ -1,0 +1,85 @@
+---
+title: "Berlin Bike Accidents - Influencing Variables"
+author: "Yogada Joshi"
+date: "2025-05-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+:::
+https://stats.oarc.ucla.edu/r/dae/ordinal-logistic-regression/ 
+
+https://jbhender.github.io/Stats506/F18/GP/Group4.html#:~:text=Usually%2C%20there%20are%20two%20assumptions,and%20existence%20of%20proportional%20odds.
+
+https://cran.r-project.org/web/packages/ordinal/ordinal.pdf 
+:::
+
+```{r}
+#libraries
+
+library(dplyr)
+```
+## Data Preparation
+
+```{r}
+# Attach code of data prep from source
+# start with descriptive stats for each dep category 
+# recode to 3-2-1 by severity descending
+data <- read.csv("accidents_2018_2023_poster.csv")
+# Filter for bicycle accidents only
+bike_data <- data %>% 
+  filter(IstRad == 1)
+
+# total = 28,729 crashes from 2018-2023
+```
+
+
+```{r}
+# Dependent Variable = Crash Severity
+# Convert UKATEGORIE to an ordered factor with correct severity order
+bike_data$Severity <- factor(bike_data$UKATEGORIE,
+                             levels = c(1, 2, 3),  # order: fatal, serious, minor
+                             labels = c("Fatal", "Serious", "Minor"),
+                             ordered = TRUE)
+# The outcome is ordered from Fatal > Serious > Minor, which aligns with real-world scale.
+```
+
+
+## Assumption check
+### Assumption - 1 Multicollinearity between explanatory variables
+```{r}
+
+```
+
+### Assumption - 2 Difference between levels is equal? 
+```{r}
+
+```
+
+## Ordinal Logistic Regression
+```{r}
+# descriptives 
+
+```
+
+```{r}
+# model run
+```
+
+```{r}
+# no default sig test so save results and then calculate p-values
+```
+
+
+## Map of spread of these accidents across Berlin
+```{r}
+
+```
+
+## Robustness checks
+```{r}
+# do later post poster submission
+```
+
