@@ -47,6 +47,18 @@ bike_data$Severity <- factor(bike_data$UKATEGORIE,
 ```
 
 
+:::
+Explanataory variables:
+
+1. UTYP1 = 7 categories / Type of crash
+
+2. isttrassenzustand: = Road condition 3 categories 
+
+3. ULICHTVERH = type of lighting 3 categories
+
+:::
+
+
 ## Assumption check
 ### Assumption - 1 Multicollinearity between explanatory variables
 ```{r}
