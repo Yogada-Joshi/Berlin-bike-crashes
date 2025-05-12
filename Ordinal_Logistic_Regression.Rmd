@@ -19,7 +19,27 @@ https://cran.r-project.org/web/packages/ordinal/ordinal.pdf
 ```{r}
 #libraries
 
+library(tidyr)
 library(dplyr)
+library(splines) # for non-linearity of accident hour variable
+library(car) # to check multicollinearity 
+library(ordinal) # for ordinal logistic regression
+library(MASS) # for ordinal logistic regression
+library(ggeffects)
+library(ggplot2)
+# Spatial autocorrelation analysis:
+library(sf)
+library(spdep)
+library(spatstat.geom)
+library(spatstat.explore)
+# map
+library(osmdata)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(patchwork)  # for side-by-side plots
+
+
 ```
 ## Data Preparation
 
@@ -37,7 +57,10 @@ bike_data <- data %>%
 
 
 ```{r}
-# Dependent Variable = Crash Severity
+# Variable set-ups
+
+### Dependent Variable = Crash Severity
+
 # Convert UKATEGORIE to an ordered factor with correct severity order
 bike_data$Severity <- factor(bike_data$UKATEGORIE,
                              levels = c(1, 2, 3),  # order: fatal, serious, minor
@@ -46,52 +69,409 @@ bike_data$Severity <- factor(bike_data$UKATEGORIE,
 # The outcome is ordered from Fatal > Serious > Minor, which aligns with real-world scale.
 ```
 
-
 :::
-Explanataory variables:
-
-1. UTYP1 = 7 categories / Type of crash
-
-2. isttrassenzustand: = Road condition 3 categories 
-
-3. ULICHTVERH = type of lighting 3 categories
-
+UTYP1:
+Type of accident
+1 = Driving accident
+2 = Turning accident
+3 = Turning / crossing accident
+4 = Crossing accident
+5 = Accident caused by stationary traffic
+6 = Accident in longitudinal traffic
+7 = other accident
 :::
 
+```{r}
+### Explanatory Variables:
+
+#1. UTYP1 : 
+
+bike_data$AccidentType <- factor(bike_data$UTYP1,
+                                 levels = 1:7,
+                                 labels = c("Driving",
+                                            "Turning",
+                                            "Turning/Crossing",
+                                            "Crossing",
+                                            "StationaryTraffic",
+                                            "Longitudinal",
+                                            "Other"))
+#2. Road condition
+bike_data$RoadCondition <- factor(bike_data$IstStrassenzustand,
+                                  levels = 0:2,
+                                  labels = c("Dry", "Wet", "WinterSlippery"))
+
+#3. Lighting Conditions
+bike_data$Lighting <- factor(bike_data$ULICHTVERH,
+                             levels = 0:2,
+                             labels = c("Daylight", "Twilight", "Darkness"))
+
+#4. Hour of Day
+bike_data$Hour <- bike_data$USTUNDE
+
+bike_data$PeakTraffic <- ifelse(bike_data$Hour %in% c(7, 8, 9, 16, 17, 18), 1, 0)
+bike_data$PeakTraffic <- factor(bike_data$PeakTraffic, levels = c(0, 1), labels = c("Off-Peak", "Peak"))
+
+```
+
+
+# Descriptive Statistics
+```{r}
+lapply(bike_data[,c("Severity", "AccidentType", "RoadCondition", "Lighting","PeakTraffic","Hour")], table)
+
+```
 
 ## Assumption check
-### Assumption - 1 Multicollinearity between explanatory variables
+### Assumption - 1 Multicollinearity between explanatory variables using Generalized Variance Inflation Factor (GVIF)
 ```{r}
 
+# Create a linear model (for checking collinearity)
+collinearity_model <- lm(as.numeric(Severity) ~ AccidentType + PeakTraffic  + Lighting + RoadCondition, 
+                         data = bike_data)
+
+# Compute GVIFs
+vif(collinearity_model)
 ```
 
-### Assumption - 2 Difference between levels is equal? 
+### Assumption - 2 The Proportional Odds (Parallel Lines) Assumption
+:::
+Here we check if the difference between levels is proportionate.
+
+The relationship between predictors and the odds of being in a higher vs. lower severity category should be the same across all splits of the ordinal outcome.
+:::
+
 ```{r}
+# Fit the ordinal model
+ordinal_model <- clm(Severity ~ AccidentType + PeakTraffic  + Lighting + RoadCondition,
+                     data = bike_data)
 
+ordinal_model2 <-  clm(Severity ~ AccidentType + Hour  + Lighting + RoadCondition,
+                     data = bike_data)
+
+# Test the proportional odds assumption
+nominal_test(ordinal_model)
 ```
+:::
+It is evident that only Accident Type is borderline significant. Therfore, robustness checks will be run after the main model to address this concern. We proceed with the ordinal logistic regression now to find the associations between the explanatory variables on bike accident severity. 
+:::
+
 
 ## Ordinal Logistic Regression
+
+
 ```{r}
-# descriptives 
+summary(ordinal_model)
+```
+
+```{r}
+# Model comparisons:
+
+AIC(ordinal_model, ordinal_model2)
+anova(ordinal_model, ordinal_model2)
+
+```
+
+# Results:
+
+```{r}
+# Probability plots
+prob_type <- ggpredict(ordinal_model, terms = "AccidentType")
+plot(prob_type) +
+  labs(title = "Severity by Type of Accident",
+       x = "Accident Type", y = "Predicted Probability",
+       fill = "Severity") +
+  theme_minimal()
+
+
+prob_peak <- ggpredict(ordinal_model, terms = "PeakTraffic")
+plot(prob_peak) +
+  labs(title = "Severity by Traffic Time",
+       x = "Traffic Period", y = "Predicted Probability",
+       fill = "Severity") +
+  theme_minimal()
+
+prob_light <- ggpredict(ordinal_model, terms = "Lighting")
+plot(prob_light) +
+  labs(title = "Severity by Lighting",
+       x = "Lighting Conditions", y = "Predicted Probability",
+       fill = "Severity") +
+  theme_minimal()
+
+prob_road <- ggpredict(ordinal_model, terms = "RoadCondition")
+plot(prob_road) +
+  labs(title = "Severity by Road Condition",
+       x = "Road Surface", y = "Predicted Probability",
+       fill = "Severity") +
+  theme_minimal()
+
+
+print(prob_type)     # For AccidentType
+print(prob_peak)     # For PeakTraffic
+print(prob_light)    # For Lighting
+print(prob_road)     # For RoadCondition
+
+```
+
+# Visuals:
+
+```{r}
+ggplot(prob_type, aes(x = x, y = predicted, fill = factor(response.level))) +
+  geom_bar(stat = "identity", position = "stack", width = 0.8) +
+  labs(title = "Severity by Type of Accident",
+       x = "Accident Type", y = "Predicted Probability", fill = "Severity") +
+  theme_minimal(base_size = 12) +
+  scale_fill_brewer(palette = "Set2")
+
+```
+
+
+```{r}
+prob_peak <- ggpredict(ordinal_model, terms = "PeakTraffic")
+
+ggplot(prob_peak, aes(x = x, y = predicted, fill = factor(response.level))) +
+  geom_bar(stat = "identity", position = "stack", width = 0.6) +
+  labs(title = "Severity by Traffic Period",
+       x = "Traffic Time", y = "Predicted Probability", fill = "Severity") +
+  theme_minimal(base_size = 12) +
+  scale_fill_brewer(palette = "Pastel1")
+
+```
+```{r}
+prob_light <- ggpredict(ordinal_model, terms = "Lighting")
+
+ggplot(prob_light, aes(x = x, y = predicted, fill = factor(response.level))) +
+  geom_bar(stat = "identity", position = "stack", width = 0.7) +
+  labs(title = "Severity by Lighting Conditions",
+       x = "Lighting", y = "Predicted Probability", fill = "Severity") +
+  theme_minimal(base_size = 12) +
+  scale_fill_brewer(palette = "Dark2")
+
+```
+```{r}
+prob_road <- ggpredict(ordinal_model, terms = "RoadCondition")
+
+ggplot(prob_road, aes(x = x, y = predicted, fill = factor(response.level))) +
+  geom_bar(stat = "identity", position = "stack", width = 0.7) +
+  labs(title = "Severity by Road Condition",
+       x = "Road Surface", y = "Predicted Probability", fill = "Severity") +
+  theme_minimal(base_size = 12) +
+  scale_fill_brewer(palette = "Accent")
+
+```
+
+
+# SPATIAL AUTOCORRELATION
+## Moran's I : Do nearby points have similar severity scores? 
+:::
+Global spatial autocorrelation — how similar values cluster based on proximity
+
+:::
+```{r}
+bike_sf <- st_as_sf(bike_data,
+                    coords = c("XGCSWGS84", "YGCSWGS84"),
+                    crs = 4326)  # WGS 84
+
+bike_sf_proj <- st_transform(bike_sf, 25833)  # UTM zone 33N (Berlin)
 
 ```
 
 ```{r}
-# model run
+bike_sf_proj$severe_bin <- ifelse(bike_sf_proj$UKATEGORIE %in% c(1, 2), 1, 0)
+bike_sf_proj$severe_bin <- as.numeric(bike_sf_proj$severe_bin)  # ensures it's numeric for Moran's I
 ```
 
 ```{r}
-# no default sig test so save results and then calculate p-values
+# Step 1: Deduplicate spatial points
+coords <- st_coordinates(bike_sf_proj)
+dup_idx <- duplicated(coords)
+bike_unique <- bike_sf_proj[!dup_idx, ]
+
+# Step 2: Recompute neighbor and weight structure
+coords_unique <- st_coordinates(bike_unique)
+nb <- knn2nb(knearneigh(coords_unique, k = 8))
+lw <- nb2listw(nb, style = "W")
+
+# Step 3: Moran's I
+moran.test(bike_unique$severe_bin, lw)
+
+```
+:::
+There is statistically significant spatial autocorrelation in the severity of bike crashes in Berlin. In other words, severe crashes (fatalities/serious injuries) tend to occur near other severe crashes more often than expected by chance.
+
+Global Moran’s I = 0.009 (p < 0.001), indicating that severe bicycle accidents are spatially clustered rather than randomly distributed across Berlin. The size indicates Slight positive autocorrelation which is significant.
+
+:::
+
+## Ripley's K : Are fatal/serious accidents more clustered than expected by chance?
+:::
+Detecting clustering vs dispersion of a point pattern at multiple scales. At what distance scales this clustering occurs? 
+
+Objective: Test whether severe accidents (fatalities or serious injuries) are more clustered than expected by chance at different distances — using Ripley’s K with spatstat.
+:::
+
+```{r}
+# Subset to severe only
+severe_pts <- bike_unique[bike_unique$severe_bin == 1, ]
+
+# Extract coordinates
+coords_severe <- st_coordinates(severe_pts)
+
+# Create window (bounding box of Berlin severe points)
+bbox <- st_bbox(severe_pts)
+win <- owin(xrange = c(bbox["xmin"], bbox["xmax"]),
+            yrange = c(bbox["ymin"], bbox["ymax"]))
+
+# Create ppp object
+severe_ppp <- ppp(x = coords_severe[, 1],
+                  y = coords_severe[, 2],
+                  window = win)
 ```
 
+```{r}
+K_result <- Kest(severe_ppp, correction = "Ripley")
+plot(K_result, main = "Ripley’s K-function for Severe Bike Accidents")
 
-## Map of spread of these accidents across Berlin
+```
+:::
+The black line is the observed K-function
+
+The red line (theoretical K) shows what you’d expect under complete spatial randomness (CSR)
+
+If your observed K lies above the red line, it suggests clustering
+If below, it indicates dispersion
+:::
+
+```{r}
+coords_all <- st_coordinates(bike_unique)
+severity_factor <- factor(bike_unique$severe_bin, labels = c("Minor", "Severe"))
+
+# Create full ppp with marks
+all_ppp <- ppp(x = coords_all[,1],
+               y = coords_all[,2],
+               window = win,
+               marks = severity_factor)
+
+# Kcross between Severe and Severe
+K_cross <- Kcross(all_ppp, i = "Severe", j = "Severe", correction = "Ripley")
+plot(K_cross, main = "Kcross: Clustering of Severe Accidents (vs CSR)")
+
+```
+:::
+Result:
+Severe bicycle crashes in Berlin are spatially clustered — they tend to occur in specific areas or along certain corridors rather than being randomly scattered.
+
+“Ripley’s K-function shows that severe accidents are significantly more clustered than expected under spatial randomness, especially at distances up to 8 km. This suggests the presence of high-risk corridors or hotspots in Berlin’s bicycle network.”
+:::
+
+### checking ripley at a smaller tighter scale
+
 ```{r}
 
+# Get coordinates
+severe_coords <- st_coordinates(severe_sf)
+
+# Remove duplicates
+dup_idx <- duplicated(severe_coords)
+severe_coords_unique <- severe_coords[!dup_idx, ]
+
+# Create point pattern with clean coords
+window <- as.owin(st_bbox(bike_sf_proj))
+severe_ppp <- ppp(x = severe_coords_unique[,1],
+                  y = severe_coords_unique[,2],
+                  window = window)
+
+# 2. Ripley's K estimate up to 3000m in 100m steps
+r_vals <- seq(0, 3000, by = 100)
+
+K_env <- envelope(severe_ppp, fun = Kest, nsim = 99, r = r_vals, correction = "iso", verbose = FALSE)
+
+# 5. Plot with envelope
+plot(K_env, main = "Clustering of Severe Bike Accidents (Ripley’s K)",
+     xlab = "Distance r (meters)", ylab = expression(K(r)),
+     legend = FALSE)
+abline(a = 0, b = pi, col = "red", lty = 2)  # theoretical under CSR
+legend("topleft", legend = c("Observed K", "CSR envelope", "CSR expectation"),
+       col = c("black", "gray", "red"), lty = c(1, NA, 2), lwd = c(2, NA, 1),
+       fill = c(NA, "gray90", NA), border = NA, bty = "n")
+
 ```
 
-## Robustness checks
+
+# KDE MAP of Severe accidents clustering
+
 ```{r}
-# do later post poster submission
-```
+# Define bounding box from your bike crash data
+berlin_bbox <- st_bbox(bike_sf_proj)  # already projected in UTM Zone 33N (EPSG:25833)
 
+# Convert bbox to WGS84 for OSM
+bbox_wgs <- st_transform(st_as_sfc(berlin_bbox), crs = 4326)
+bbox_matrix <- st_bbox(bbox_wgs)
+
+severe_points <- bike_sf_proj[bike_sf_proj$UKATEGORIE %in% c(1, 2), ]
+
+# Extract coordinates from severe bike crashes
+coords_all <- st_coordinates(severe_points)
+
+
+
+
+
+```
+:::
+Ripley’s K shows that severe bicycle accidents in Berlin are spatially clustered at short distances (100–1500 meters), beyond what would be expected by chance.
+:::
+
+```{r}
+# 🔢 Coordinates for severe crashes
+coords <- st_coordinates(bike_sf_proj[bike_sf_proj$UKATEGORIE %in% c(1, 2), ])
+coords <- coords[is.finite(coords[,1]) & is.finite(coords[,2]), ]
+
+# 🔥 Kernel Density Estimation
+kde <- kde2d(coords[,1], coords[,2], n = 300)
+kde_raster <- raster(kde)
+kde_df <- as.data.frame(rasterToPoints(kde_raster))
+colnames(kde_df) <- c("X", "Y", "Density")
+
+# 🔄 Scaled version
+kde_df$RelativeDensity <- kde_df$Density / max(kde_df$Density)
+
+# 🎨 Absolute KDE Plot
+p1 <- ggplot() +
+  geom_raster(data = kde_df, aes(x = X, y = Y, fill = Density), alpha = 0.9) +
+  scale_fill_viridis_c(
+    option = "inferno",
+    name = "Crash Density",
+    labels = scales::label_number(accuracy = 0.0001)
+  ) +
+  scale_x_continuous(labels = scales::label_comma()) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  coord_equal() +
+  labs(title = "Absolute Density of Severe Bike Accidents") +
+  theme_minimal(base_size = 12)
+
+# 🎨 Relative KDE Plot
+p2 <- ggplot() +
+  geom_raster(data = kde_df, aes(x = X, y = Y, fill = RelativeDensity), alpha = 0.9) +
+  scale_fill_viridis_c(
+    option = "inferno",
+    name = "Relative Density",
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  scale_x_continuous(labels = scales::label_comma()) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  coord_equal() +
+  labs(title = "Relative Density (Normalized)") +
+  theme_minimal(base_size = 12)
+
+# 🖼️ Combine and plot side-by-side
+p1 + p2 + plot_layout(ncol = 2) +
+  plot_annotation(
+    title = "Hotspots of Severe Bicycle Accidents in Berlin (2018–2023)",
+    theme = theme(plot.title = element_text(face = "bold", size = 14))
+  )
+```
+:::
+| Map Type         | Description                                    |
+| ---------------- | ---------------------------------------------- |
+| **Absolute KDE** | Raw crash density per m² (with decimals shown) |
+| **Relative KDE** | Rescaled from 0 to 1 (shows % of max density)  |
+:::
